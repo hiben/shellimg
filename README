@@ -1,0 +1,5 @@
+=== shellimg ===
+shellimg is a shell script to display an image inside a terminal emulator.
+It works by converting colors in an image to escape codes for terminals that understand 256 color codes (xterm and compatible).
+
+See the script for more details.
