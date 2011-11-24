@@ -81,14 +81,18 @@ if [ -n "$NO_KSH" ] && [ $NO_KSH = "0" ] ; then
 fi
 
 if [ -z "${NO_KSH}" ] && [ -z "${KSH_VERSION}" ] ; then
-  if [ -x $(which ksh) ] ; then
+  KSH=$(which ksh 2>/dev/null)
+  if [ $? != 0 ] ; then
+    unset KSH
+  fi
+  if [ -n "$KSH" ] &&[ -x "$KSH" ] ; then
     export PIXEL=${PIXEL}
     export COLUMNS=${COLUMNS}
     export DO_RESIZE=${DO_RESIZE}
     if [ -n "$VERBOSE" ] ; then
       export VERBOSE=${VERBOSE}
     fi
-    exec $(which ksh) $0 "$1"
+    exec $KSH $0 "$1"
   fi
 fi
 
