@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# shellimg 1.3
+# shellimg 1.4
 # Shell-based image display for xterm-256-color compatible terminals
 # Copyright 2011 Hendrik Iben - hendrik <dot> iben <at> googlemail <dot> com
 # 
@@ -11,10 +11,14 @@
 #  ImageMagick (identify, convert)
 #  netpbm (pnmtopnm)
 #  ncurses (tput)
-#  coreutils (basename) 
+#  coreutils (basename)
+#  sed (for processing bitmap images)
 #  a terminal that understands xterm-256 color escape sequences
 #    (well, only for viewing... you can still pipe...)
 #
+# Changes in 1.4
+#  - added MAXLINES options
+#  - added support for grey and bitmap images
 # Changes in 1.3
 #  - renamed to shellimg (was: bashimg)
 #  - added error checking
@@ -23,10 +27,6 @@
 #  - fixed small syntax glitch to make this script run with ksh
 # Changes in 1.1
 #  - now trying to find temporary directory for files
-#
-# Bugs:
-# Some images might get converted to a type 1 or 2 PNM image
-# resulting in this script to quit with an error message.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -46,6 +46,7 @@ if [ -z "$1" ] ; then
   echo "  global variables for control:"
   echo "  PIXEL     - what is printed for each pixel (default: '  ' (two spaces))"
   echo "  COLUMNS   - specify terminal width (default: queried via tput)"
+  echo "  MAXLINES  - specify maximum number of lines to use (default: as needed)"
   echo "  DO_RESIZE - resize image if terminal too small (default: 1)"
   echo "  VERBOSE   - some info on stderr (default: 0)"
   echo "  NO_KSH    - if set (!=0) do not try to run the script with KornShell (if not already)"
@@ -63,6 +64,10 @@ fi
 
 PIXEL=${PIXEL:-"  "}
 MAXWIDTH=$(( $COLUMNS / ${#PIXEL} ))
+
+if [ -n "$MAXLINES" ] ; then
+  DO_RESIZE=1
+fi
 
 if [ -z "$DO_RESIZE" ] ; then
   DO_RESIZE=1
@@ -92,7 +97,7 @@ if [ -z "${NO_KSH}" ] && [ -z "${KSH_VERSION}" ] ; then
     if [ -n "$VERBOSE" ] ; then
       export VERBOSE=${VERBOSE}
     fi
-    exec $KSH $0 "$1"
+    exec $KSH $0 "$@"
   fi
 fi
 
@@ -184,15 +189,28 @@ for RDIM in $IMGREALDIM; do
 done
 
 RESIZEX=$REALWIDTH
+RESIZEY=$REALHEIGHT
 
-if [ $DO_RESIZE ] && [ $REALWIDTH -gt $MAXWIDTH ] ; then
-  if [ -n "$VERBOSE" ] ; then
-    echo "Resizing ${REALWIDTH}x${REALHEIGHT} to new width ${MAXWIDTH}..." >&2
+if [ -n "$MAXLINES" ] && [ $REALWIDTH -gt $MAXLINES ] ; then
+  RESIZEY=$MAXLINES
+  RESIZEX=$(( ( $RESIZEY * $REALWIDTH ) / $REALHEIGHT ))
+  if [ $RESIZEX -lt 1 ] ; then
+    RESIZEX=1
   fi
-  RESIZEX=$MAXWIDTH
+  if [ -n "$VERBOSE" ] ; then
+    echo "Too many lines: resizing ${REALWIDTH}x${REALHEIGHT} to ${RESIZEX}x${RESIZEY}..." >&2
+  fi
 fi
 
-convert "$1" -resize ${RESIZEX}x "$TMPFILE_RAW" 2>/dev/null
+if [ $DO_RESIZE ] && [ $RESIZEX -gt $MAXWIDTH ] ; then
+  RESIZEX=$MAXWIDTH
+  RESIZEY=$(( ( $RESIZEX * $REALHEIGHT ) / $REALWIDTH ))
+  if [ -n "$VERBOSE" ] ; then
+    echo "Resizing ${REALWIDTH}x${REALHEIGHT} to ${RESIZEX}x${RESIZEY}..." >&2
+  fi
+fi
+
+convert "$1" -resize ${RESIZEX}x${RESIZEY} "$TMPFILE_RAW" 2>/dev/null
 if [ $? != 0 ] ; then
   echo "Image could not be converted. Stoping..." >&2
   exit 1
@@ -219,13 +237,26 @@ while read LINE; do
   fi
   if [ -z "$HEADER" ] ; then
     HEADER=$LINE
-    if [ "$HEADER" != "P3" ] ; then
+    if [ "$HEADER" != "P3" ] && [ "$HEADER" != "P2" ] && [ "$HEADER" != "P1" ] ; then
       echo "Unsupported format: $HEADER"
       exit 1
     fi
+    if [ "$HEADER" = "P1" ] ; then
+      if [ -n "$VERBOSE" ] ; then
+        echo "Processing bitmap..."
+      fi
+      MAX=1
+      ISGRAY=1
+    fi
+    if [ "$HEADER" = "P2" ] ; then
+      if [ -n "$VERBOSE" ] ; then
+        echo "Processing greymap..."
+      fi
+      ISGRAY=1
+    fi
     continue
   fi
-  if [ -z "$DIMS" ]; then
+  if [ -z "$DIMS" ] ; then
     DIMS=$LINE
     for a in $DIMS; do
       if [ -z "$WIDTH" ] ; then WIDTH=$a; continue; fi
@@ -243,23 +274,33 @@ while read LINE; do
     fi
     continue
   fi
+  if [ "$HEADER" = "P1" ] ; then
+    LINE=$(echo $LINE | sed 's/./\0 /g')
+  fi
   for CV in $LINE; do
     if [ $MAX != 255 ] ; then
       CV=$(( ($CV * 255) / $MAX ))
     fi
-    case $CVIDX in
-      '0')
-        R=$CV
-      ;;
-      '1')
-        G=$CV
-      ;;
-      '2')
-        B=$CV
-      ;;
-    esac
+    if [ $ISGRAY ] ; then
+      R=$CV
+      G=$CV
+      B=$CV
+      CVIDX=2
+    else
+      case $CVIDX in
+        '0')
+          R=$CV
+        ;;
+        '1')
+          G=$CV
+        ;;
+        '2')
+          B=$CV
+        ;;
+      esac
+    fi
     CVIDX=$(( $CVIDX + 1))
-    if [ $CVIDX -gt 2 ]; then
+    if [ $CVIDX -gt 2 ] ; then
       CVIDX=0
       COLOR=$(color_index $R $G $B)
       IMGLINE="${IMGLINE}\\033[48;5;${COLOR}m${PIXEL}"
